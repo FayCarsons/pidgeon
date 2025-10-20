@@ -1,9 +1,16 @@
-use std::{io::Write, path::PathBuf};
+use std::{path::PathBuf, time::Duration};
 
 use clap::*;
+use futures::StreamExt;
 use rustyline::error::ReadlineError;
 use thiserror::Error;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split},
+    time::{error::Elapsed, timeout},
+};
 use tokio_serial::{SerialPortBuilderExt, SerialPortInfo, SerialPortType, SerialStream};
+use tokio_util::codec::{Decoder, Framed, FramedRead, LinesCodec};
+use tracing::{Level, error, info, span};
 
 #[derive(Debug, Parser)]
 #[command(name = "pidgeon")]
@@ -48,13 +55,14 @@ type Result<T> = std::result::Result<T, Error>;
 | `^^b` | Enter bootloader mode | `^^b` |
 * */
 
+#[derive(Debug, Clone, Copy)]
 enum Message {
-    Upload,
-    Execute,
-    Write,
-    Print,
-    Version,
-    Bootloader,
+    Upload,     // ^^s
+    Execute,    // ^^e
+    Write,      // ^^w
+    Print,      // ^^p
+    Version,    // ^^v
+    Bootloader, // ^^b
 }
 
 impl Message {
@@ -87,66 +95,150 @@ impl Message {
 }
 
 struct Crow {
-    conn: SerialStream,
+    reader: FramedRead<ReadHalf<SerialStream>, LinesCodec>,
+    writer: WriteHalf<SerialStream>,
 }
 
 impl Crow {
     fn new() -> Result<Self> {
         let ports = tokio_serial::available_ports()?;
 
+        info!("Ports: {:?}", &ports);
+
         let crow = ports.iter().find_map(|port| match port {
             SerialPortInfo {
                 port_name,
                 port_type: SerialPortType::UsbPort(info),
-            } if info.vid == 0x0483 && info.pid == 0x5740 => Some(port_name),
+            } if info
+                .product
+                .as_ref()
+                .is_some_and(|s| s == "crow: telephone line") =>
+            {
+                Some(port_name)
+            }
             _ => None,
         });
 
         match crow {
-            Some(path) => Ok(Crow {
-                conn: tokio_serial::new(path, 115_200).open_native_async()?,
-            }),
+            Some(path) => {
+                info!("Found crow: {}", path);
+
+                let port = tokio_serial::new(path, 115_200).open_native_async()?;
+                let (reader, writer) = tokio::io::split(port);
+                let reader = FramedRead::new(reader, LinesCodec::new());
+
+                Ok(Crow { writer, reader })
+            }
             None => Err(Error::NotFound),
         }
     }
 
-    fn write_prefix(&mut self, message: Message) -> Result<()> {
-        Ok(self.conn.write_all(message.as_bytes().as_slice())?)
+    async fn write_message(&mut self, message: Message) -> Result<()> {
+        info!("Writing message: {message:?}");
+
+        self.writer.write_all(message.as_bytes().as_slice()).await?;
+        self.writer.write_all(b"\n").await?;
+        Ok(())
     }
 
-    fn write_all(&mut self, chunk: &[u8]) -> Result<()> {
-        Ok(self.conn.write_all(chunk)?)
+    async fn write_all(&mut self, chunk: &[u8]) -> Result<()> {
+        info!("Writing bytes: {:?}", String::from_utf8_lossy(chunk));
+
+        self.writer.write_all(chunk).await?;
+        self.writer.write_all(b"\n").await?;
+        Ok(())
+    }
+
+    async fn write_script(&mut self, script: &str) -> Result<()> {
+        info!("Writing script: {:?}", &script[..256]);
+
+        self.write_message(Message::Upload).await?;
+        self.writer.write_all(script.as_bytes()).await?;
+        self.write_message(Message::Execute).await?;
+        self.writer.write_all(b"\n").await?;
+
+        Ok(())
+    }
+
+    async fn write_oversize_chunk(&mut self, chunk: &[u8]) -> Result<()> {
+        info!("Writing chunk of text w/ len > 64b");
+
+        self.writer.write_all(b"```").await?;
+        self.writer.write_all(chunk).await?;
+        self.writer.write_all(b"```").await?;
+        self.writer.write_all(b"\n").await?;
+
+        Ok(())
+    }
+
+    async fn try_read(&mut self) -> Option<String> {
+        match timeout(Duration::from_millis(500), self.reader.next()).await {
+            Ok(Some(Ok(read))) => {
+                info!("Read {read} bytes");
+
+                Some(read)
+            }
+            Ok(Some(Err(e))) => {
+                error!("Crow stumbled over her words: {e:?}");
+
+                None
+            }
+            Ok(None) => None,
+            Err(_) => {
+                error!("Crow failed to speak fast enough");
+
+                None
+            }
+        }
     }
 }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    app(Cli::parse().command).map_err(std::io::Error::other)
+    tracing_subscriber::fmt::init();
+
+    app(Cli::parse().command)
+        .await
+        .map_err(std::io::Error::other)
 }
 
-fn app(command: Commands) -> Result<()> {
+async fn app(command: Commands) -> Result<()> {
+    let mut crow = Crow::new()?;
+
+    if let Some(greeting) = crow.try_read().await {
+        println!("{greeting}")
+    }
+
     match command {
         Commands::File { path } => {
-            let mut crow = Crow::new()?;
-
             let contents = std::fs::read_to_string(path)?;
-            crow.write_prefix(Message::Upload)?;
-            crow.write_all(contents.as_bytes())?;
+
+            // because the crow reads in 64byte chunks by default, when uploadin an entire file we
+            // should tell it that it is instead receiving more than that
+            crow.write_script(contents.as_str()).await?;
+
             Ok(())
         }
         Commands::Repl => {
-            let mut crow = Crow::new()?;
-
             let mut rl = rustyline::DefaultEditor::new()?;
 
             loop {
                 let line = rl.readline(">> ")?;
+                info!("Got line: {line}");
 
                 if line.as_str() == "exit" {
                     break Ok(());
                 }
 
-                crow.write_all(line.as_bytes())?;
+                if line.len() > 64 {
+                    crow.write_oversize_chunk(line.as_bytes()).await?;
+                } else {
+                    crow.write_all(line.as_bytes()).await?;
+                }
+
+                if let Some(reply) = crow.try_read().await {
+                    println!("{reply}")
+                }
             }
         }
         Commands::Remote => {
