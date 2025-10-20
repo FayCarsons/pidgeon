@@ -1,6 +1,6 @@
 # Druid-Crow Communication Protocol Analysis
 
-This document provides a comprehensive analysis of the communication protocol used between the Druid REPL/CLI client and the Crow device, based on the Python codebase at `/Users/faycarsons/Desktop/Code/Python/druid`.
+This document provides a comprehensive analysis of the communication protocol used between the Druid REPL/CLI client and the Crow device to be used as a reference in this reimplementation.
 
 ## Overview
 
