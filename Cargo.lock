@@ -569,6 +569,7 @@ dependencies = [
  "clap",
  "rustyline",
  "serde",
+ "thiserror",
  "tokio",
  "tokio-serial",
  "tokio-tungstenite",

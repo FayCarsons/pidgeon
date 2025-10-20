@@ -7,6 +7,7 @@ edition = "2024"
 clap = { version = "4.5.49", features = ["derive"] }
 rustyline = "17.0.2"
 serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["full"] }
 tokio-serial = "5.4.5"
 tokio-tungstenite = "0.28.0"
