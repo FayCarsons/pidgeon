@@ -2,7 +2,7 @@ local client = nil
 
 function or_require()
   if not client then 
-    client = require'pidgeon.client'
+    client = require('pidgeon.client')
   end
 
   return client
