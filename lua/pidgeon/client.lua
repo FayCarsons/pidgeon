@@ -28,16 +28,17 @@ function M.connect()
     return false
   end
 
-  local ok, WebsocketClient = pcall(require, 'websocket.client')
+  local ok, websocket = pcall(require, 'websocket')
 
-  if not ok then 
-    vim.notify('websocket library not installed', vim.log.levels.ERROR)
-    print(vim.inspect(WebsocketClient))
+  if not ok or not websocket or not websocket.WebsocketClient then 
+    vim.notify('websocket library not installed or WebsocketClient not available', vim.log.levels.ERROR)
+    if not ok then
+      print(vim.inspect(websocket))
+    end
     return false
   end
 
-
-  client = WebsocketClient.WebsocketClient.new{
+  client = websocket.WebsocketClient.new{
     connect_addr = require('pidgeon').config.pidgeonURL,
 
     on_message = function(self, message)
