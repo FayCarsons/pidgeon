@@ -15,15 +15,15 @@ function M.setup(opts)
 
   local client = require('pidgeon.client')
 
-  if config.keymaps.sendLine then 
-    vim.keymap.set('n', config.keymaps.sendLine, function() 
+  if opts.config.keymaps.sendLine then 
+    vim.keymap.set('n', opts.config.keymaps.sendLine, function() 
       local line = vim.api.nvim_get_current_line()
       client.send(line)
     end, {desc='send current line'})
   end
 
-  if config.keymaps.sendSelection then 
-    vim.keymap.set('v', config.keymaps.sendSelection, function() 
+  if opts.config.keymaps.sendSelection then 
+    vim.keymap.set('v', opts.config.keymaps.sendSelection, function() 
       local startPos = vim.fn.getpos("'<")
       local endPos = vim.fn.getpos("'>")
       local lines = vim.api.nvim_buf_et_lines(0, startPos[2] - 1, endPos[2], false)
@@ -32,8 +32,8 @@ function M.setup(opts)
     end, {desc='send selection'})
   end
 
-  if config.keymaps.sendBuffer then 
-    vim.keymap.set('n', config.keymaps.sendBuffer, function() 
+  if opts.config.keymaps.sendBuffer then 
+    vim.keymap.set('n', opts.config.keymaps.sendBuffer, function() 
       local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
       local code table.concat(lines, '\n')
       client.send(code)
