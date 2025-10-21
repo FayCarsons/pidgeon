@@ -13,6 +13,12 @@ M.config = {
 function M.setup(opts) 
   M.config = vim.tbl_deep_extend('force', M.config, opts or {})
 
+  -- Initialize websocket.nvim
+  local websocket_ok, websocket = pcall(require, 'websocket')
+  if websocket_ok and websocket.setup then
+    websocket.setup()
+  end
+
   local client = require('pidgeon.client')
 
   if M.config.keymaps.sendLine then 
