@@ -28,7 +28,7 @@ function M.connect()
     return false
   end
 
-  local ok, WebsocketClient = pcall(require, 'websocket.nvim')
+  local ok, WebsocketClient = pcall(require, 'websocket.client')
   if not ok then 
     vim.notify('websocket.nvim not installed', vim.log.levels.ERROR)
     return false
