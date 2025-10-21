@@ -70,19 +70,28 @@ function M.disconnect()
   end
 end
 
-function M.send(code)
-  if not isConnected or not client then
-    vim.notify('not connected to pidgeon - run :PidgeonConnect', vim.log.levels.WARN)
+local function ready()
+  if not isConnected or not client then 
+    vim.notify('not connected to pidgeon server, run :PidgeonConnect', vim.log.levels.ERROR)
     return false
   end
 
-  client:try_send_data(code)
-  return true
+  return true 
+end
+
+function M.send(code)
+  if ready() then
+    client:try_send_data(code)
+    return true
+  end
 end
 
 function M.sendCurrentBuf() 
-  local content = vim.api.nvim_buf_get_lines(0,0,vim.api.nvim_buf_line_count(0), false)
-  return table.concat(content, '\n')
+  if ready() then
+    local content = vim.api.nvim_buf_get_lines(0,0,vim.api.nvim_buf_line_count(0), false)
+    client:try_send_data(table.concat(content, '\n'))
+    return true
+  end
 end
 
 function M.isConnected()
