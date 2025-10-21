@@ -18,7 +18,7 @@ end, {})
 
 vim.api.nvim_create_user_command('PidgeonSend', function(opts)
   or_require().send(opts.args)
-end, {nargs=1})
+end, { nargs = 1 })
 
 vim.api.nvim_create_user_command('PidgeonStatus', function()
   local status = or_require().isConnected() and 'Connected' or 'Disconnected'
