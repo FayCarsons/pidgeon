@@ -34,10 +34,14 @@ function M.setup(opts)
 
   if M.config.keymaps.sendBuffer then 
     vim.keymap.set('n', M.config.keymaps.sendBuffer, function() 
-      local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-      local code table.concat(lines, '\n')
-      client.send(code)
+      client.sendBuf()
     end, {desc='send buffer'})
+  end
+
+  if M.config.keymaps.sendNearestExpression then 
+    vim.keymap.set('n', M.config.keymaps.sendNearestExpression, function()
+      require('pidgeon.treesitter').sendNearest()
+    end, { desc = 'send nearest expression' })
   end
 
   if M.config.autoConnect then 
