@@ -80,6 +80,11 @@ function M.send(code)
   return true
 end
 
+function M.sendCurrentBuf() 
+  local content = vim.api.nvim_buf_get_lines(0,0,vim.api.nvim_buf_line_count(0), false)
+  return table.concat(content, '\n')
+end
+
 function M.isConnected()
   return isConnected
 end

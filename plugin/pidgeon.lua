@@ -1,32 +1,21 @@
-local client = nil
-
-local function or_require()
-  if not client then 
-    client = require('pidgeon.client')
-  end
-
-  return client
-end
-
 vim.api.nvim_create_user_command('PidgeonConnect', function()
-  or_require().connect() 
+  require('pidgeon.client').connect() 
 end, { desc = 'connect to pidgeon server' })
 
 vim.api.nvim_create_user_command('PidgeonDisconnect', function()
-  or_require().disconnect()
+  require('pidgeon.client').disconnect()
 end, { desc = 'close connection to pidgeon server' })
 
-vim.api.nvim_create_user_command(
-  'PidgeonSend', 
-  function(opts)
-    or_require().send(opts.args)
-  end, { 
-    nargs = 1,
-    desc = 'send a chunk of lua to the pidgeon server' 
-})
+vim.api.nvim_create_user_command('PidgeonSend', function(opts)
+  require('pidgeon.treesitter').sendNearest()
+end, { desc = 'send the expression under the cursor to pidgeon' })
+
+vim.api.nvim_create_user_command('PigeonSendBuf', function(opts)
+  require('pidgeon.client').sendCurrentBuf()
+end, { desc = 'send the current buffer to crow' })
 
 vim.api.nvim_create_user_command('PidgeonStatus', function()
-  local status = or_require().isConnected() and 'Connected' or 'Disconnected'
+  local status = require('pidgeon.client').isConnected() and 'Connected' or 'Disconnected'
 
-  vim.notify('Pidgeon status: ' .. status, vim.log.levels.INFO)
-end, {})
+  vim.notify('pidgeon status: ' .. status, vim.log.levels.INFO)
+end, { desc = 'get the status of the pidgeon server' })
