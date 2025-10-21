@@ -4,13 +4,17 @@ local client = nil
 local isConnected = false
 
 local function checkPidgeon()
+  -- Curl endpoint to see if pidgeon is available
   local handle = io.popen("curl -s http://localhost:6666/check 2>/dev/null")
+
   if not handle then
     return false
   end
 
   local result = handle:read('*a')
   handle:close()
+
+  if result == "" then return false end
 
   local ok, data = pcall(vim.json.decode, result)
   return ok and data
@@ -24,13 +28,28 @@ function M.connect()
     return false
   end
 
-  local WebsocketClient = require('websocket.client').WebsocketClient
+  local ok, WebsocketClient = pcall(require, 'websocket.client')
+  if not ok then 
+    vim.notify('websocket.nvim not installed', vim.log.levels.ERROR)
+    return false
+  end
 
-  client = WebsocketClient.new{
+
+  client = WebsocketClient.WebsocketClient.new{
     connect_addr = require('pidgeon').config.pidgeonURL,
 
     on_message = function(self, message)
       vim.notify(message, vim.log.levels.INFO, { title = 'Pidgeon' })
+    end,
+
+    on_connect = function(self) 
+      isConnected = true
+      vim.notify('connected to pidgeon', vim.log.levels.INFO)
+    end,
+
+    on_disconnect = function(self)
+      isConnected = false
+      vim.notify('pidgeon disconnected', vim.log.levels.INFO)
     end,
 
     on_error = function(self, err)
@@ -39,6 +58,7 @@ function M.connect()
   }
 
   client:try_connect()
+
   return true
 end
 
@@ -51,8 +71,8 @@ function M.disconnect()
 end
 
 function M.send(code)
-  if not (isConnected and client) then
-    vim.notify('Not connected to Pidgeon. Run :PidgeonConnect', vim.log.levels.WARN)
+  if not isConnected or not client then
+    vim.notify('not connected to pidgeon - run :PidgeonConnect', vim.log.levels.WARN)
     return false
   end
 
