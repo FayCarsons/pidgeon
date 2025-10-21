@@ -41,7 +41,7 @@ function M.setup(opts)
   end
 
   if M.config.autoConnect then 
-    vim.defer_fn(function 
+    vim.defer_fn(function() 
       require('pidgeon.client').connect()
     end, 1000)
   end
