@@ -1,6 +1,6 @@
 local client = nil
 
-function or_require()
+local function or_require()
   if not client then 
     client = require('pidgeon.client')
   end
@@ -9,16 +9,21 @@ function or_require()
 end
 
 vim.api.nvim_create_user_command('PidgeonConnect', function()
-  or_require().connect 
-end, {})
+  or_require().connect() 
+end, { desc = 'connect to pidgeon server' })
 
 vim.api.nvim_create_user_command('PidgeonDisconnect', function()
   or_require().disconnect()
-end, {})
+end, { desc = 'close connection to pidgeon server' })
 
-vim.api.nvim_create_user_command('PidgeonSend', function(opts)
-  or_require().send(opts.args)
-end, { nargs = 1 })
+vim.api.nvim_create_user_command(
+  'PidgeonSend', 
+  function(opts)
+    or_require().send(opts.args)
+  end, { 
+    nargs = 1,
+    desc = 'send a chunk of lua to the pidgeon server' 
+})
 
 vim.api.nvim_create_user_command('PidgeonStatus', function()
   local status = or_require().isConnected() and 'Connected' or 'Disconnected'
