@@ -14,9 +14,9 @@ pub async fn run(mut writer: CrowWriter) -> Result<()> {
         }
 
         if line.len() > 64 {
-            writer.write_delimited(line.as_bytes()).await?;
+            writer.write_delimited(&line).await?;
         } else {
-            writer.write_all(line.as_bytes()).await?;
+            writer.write_all(&line).await?;
         }
     }
 }

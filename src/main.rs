@@ -26,6 +26,7 @@ enum Commands {
     Repl,
     Remote,
 }
+use Commands::*;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -37,18 +38,26 @@ async fn main() -> std::io::Result<()> {
 }
 
 async fn app(command: Commands) -> Result<()> {
-    let (reader, mut writer) = Crow::new()?.split();
-
-    let _reader_handle = tokio::spawn(reader.run());
+    let crow = Crow::new()?;
 
     match command {
-        Commands::File { path } => {
+        File { path } => {
+            let (mut reader, mut writer) = crow.split();
+
             let contents = std::fs::read_to_string(path)?;
             writer.write_script(contents.as_str()).await?;
 
+            let response = reader.read_once().await?;
+            println!("{response}");
+
             Ok(())
         }
-        Commands::Repl => repl::run(writer).await,
-        Commands::Remote => server::start_websocket_server(writer).await,
+        Repl => {
+            let (reader, writer) = crow.split();
+            let _reader_handle = tokio::spawn(reader.run());
+
+            repl::run(writer).await
+        }
+        Remote => server::start_websocket_server(crow).await,
     }
 }

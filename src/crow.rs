@@ -1,6 +1,7 @@
 use super::error::*;
 use futures::StreamExt;
-use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 use tokio_serial::{SerialPortBuilderExt, SerialPortInfo, SerialPortType, SerialStream};
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{error, info};
@@ -45,39 +46,41 @@ impl Crow {
 
         (CrowReader(reader), CrowWriter(writer))
     }
+
+    pub async fn write_delimited(&mut self, chunk: &str) -> Result<()> {
+        write_delimited(&mut self.0, chunk.as_bytes()).await
+    }
+
+    pub async fn write_script(&mut self, chunk: &str) -> Result<()> {
+        write_script(&mut self.0, chunk.as_bytes()).await
+    }
+
+    pub async fn write_all(&mut self, chunk: &str) -> Result<()> {
+        write_all(&mut self.0, chunk.as_bytes()).await
+    }
+
+    pub async fn read_line(&mut self) -> Result<String> {
+        read_line(&mut self.0).await
+    }
+
+    pub async fn try_read_line(&mut self) -> Result<Option<String>> {
+        read_line_if_available(&mut self.0).await
+    }
 }
 
 pub struct CrowWriter(WriteHalf<SerialStream>);
 
 impl CrowWriter {
-    pub async fn write_all(&mut self, chunk: &[u8]) -> Result<()> {
-        info!("Writing bytes: {:?}", String::from_utf8_lossy(chunk));
-
-        self.0.write_all(chunk).await?;
-        self.0.write_all(b"\n").await?;
-        Ok(())
+    pub async fn write_delimited(&mut self, chunk: &str) -> Result<()> {
+        write_delimited(&mut self.0, chunk.as_bytes()).await
     }
 
-    pub async fn write_script(&mut self, script: &str) -> Result<()> {
-        info!("Writing script: {:?}", &script[..256]);
-
-        self.0.write_all(b"^^s").await?;
-        self.0.write_all(script.as_bytes()).await?;
-        self.0.write_all(b"^^e").await?;
-        self.0.write_all(b"\n").await?;
-
-        Ok(())
+    pub async fn write_script(&mut self, chunk: &str) -> Result<()> {
+        write_script(&mut self.0, chunk.as_bytes()).await
     }
 
-    pub async fn write_delimited(&mut self, chunk: &[u8]) -> Result<()> {
-        info!("Writing chunk of text w/ len > 64b");
-
-        self.0.write_all(b"```").await?;
-        self.0.write_all(chunk).await?;
-        self.0.write_all(b"```").await?;
-        self.0.write_all(b"\n").await?;
-
-        Ok(())
+    pub async fn write_all(&mut self, chunk: &str) -> Result<()> {
+        write_all(&mut self.0, chunk.as_bytes()).await
     }
 }
 
@@ -94,5 +97,85 @@ impl CrowReader {
                 }
             }
         }
+    }
+
+    pub async fn read_once(&mut self) -> Result<String> {
+        Ok(self.0.next().await.ok_or(Error::ConnectionClosed)??)
+    }
+}
+
+// General read/write ops w/ crow's protocol
+
+pub async fn write_all<W>(writer: &mut W, chunk: &[u8]) -> Result<()>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    info!("Writing bytes: {:?}", String::from_utf8_lossy(chunk));
+
+    writer.write_all(chunk).await?;
+    writer.write_all(b"\n").await?;
+    Ok(())
+}
+
+pub async fn write_script<W>(writer: &mut W, script: &[u8]) -> Result<()>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    info!("Writing script: {:?}", &script[..256]);
+
+    writer.write_all(b"^^s").await?;
+    writer.write_all(script).await?;
+    writer.write_all(b"^^e").await?;
+    writer.write_all(b"\n").await?;
+
+    Ok(())
+}
+
+pub async fn write_delimited<W>(writer: &mut W, chunk: &[u8]) -> Result<()>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    info!("Writing chunk of text w/ len > 64b");
+
+    writer.write_all(b"```").await?;
+    writer.write_all(chunk).await?;
+    writer.write_all(b"```").await?;
+    writer.write_all(b"\n").await?;
+
+    Ok(())
+}
+
+pub async fn read_line<R>(reader: &mut R) -> Result<String>
+where
+    R: AsyncRead + Unpin,
+{
+    // I never get to write any fun low-level bullshit bc tokio already has it >:(
+    let mut bufreader = BufReader::new(reader);
+
+    let mut buf = String::with_capacity(512);
+    bufreader.read_line(&mut buf).await?;
+
+    // shrink her
+    buf.shrink_to_fit();
+
+    Ok(buf)
+}
+
+pub async fn read_line_if_available<R>(reader: &mut R) -> Result<Option<String>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut bufreader = BufReader::new(reader);
+
+    let mut buf = String::with_capacity(512);
+
+    if let Ok(read) =
+        tokio::time::timeout(Duration::from_millis(10), bufreader.read_line(&mut buf)).await
+    {
+        let _ = read?;
+        buf.shrink_to_fit();
+        Ok(Some(buf))
+    } else {
+        Ok(None)
     }
 }

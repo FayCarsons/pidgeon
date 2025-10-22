@@ -31,7 +31,7 @@ function M.connect()
   local ok, websocket_client = pcall(require, 'websocket.client')
 
   if not ok or not websocket_client or not websocket_client.WebsocketClient then 
-    vim.notify('websocket library not installed or WebsocketClient not available', vim.log.levels.ERROR)
+    vim.notify('websocket library not installed', vim.log.levels.ERROR)
     if not ok then
       print('Websocket require error:', websocket_client)
     end

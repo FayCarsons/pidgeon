@@ -1,4 +1,4 @@
-use crate::crow::CrowWriter;
+use crate::crow::Crow;
 
 use super::error::*;
 use axum::{
@@ -6,24 +6,37 @@ use axum::{
     body::Body,
     extract::{
         State,
-        ws::{WebSocket, WebSocketUpgrade},
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
     response::Json,
     routing::get,
 };
-use futures::lock::Mutex;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use futures::{SinkExt, lock::Mutex};
+use serde::{Deserialize, Serialize};
+use std::{
+    fmt::Write,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use tracing::{error, info};
 
 #[derive(Clone)]
 struct AppState {
-    writer: Arc<Mutex<CrowWriter>>,
+    crow: Arc<Mutex<Crow>>,
     connected: Arc<AtomicBool>,
 }
+
+// We do *not* allocate in this household
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum PidgeonResponse<'a> {
+    Caw,
+    Song { content: &'a str },
+    Grumble { reason: &'a str },
+}
+use PidgeonResponse::*;
 
 // GET /connect - websocket endpoint
 async fn websocket_handler(
@@ -40,18 +53,75 @@ async fn websocket_handler(
     }
 }
 
-async fn handle_socket(mut socket: WebSocket, AppState { writer, .. }: AppState) {
+async fn crow_communication(crow: &mut Crow, chunk: &str) -> Result<Option<String>> {
+    crow.write_delimited(chunk).await?;
+    crow.try_read_line().await
+}
+
+async fn handle_socket(mut socket: WebSocket, AppState { crow, .. }: AppState) {
     // Increment connection count
     info!("Creating websocket connection");
 
-    let mut writer = writer.lock().await;
+    let mut crow = crow.lock().await;
+    let mut error_buffer = String::with_capacity(512);
+    let mut got_error = false;
 
-    while let Some(Ok(msg)) = socket.recv().await {
-        if let axum::extract::ws::Message::Text(text) = msg {
-            info!("Received command: {}", text);
-            if let Err(e) = writer.write_delimited(text.as_bytes()).await {
-                error!("Write error: {e:?}")
+    loop {
+        match socket.recv().await {
+            Some(Ok(Message::Text(text))) => {
+                info!("Received command: {}", text);
+
+                let temp = crow_communication(&mut crow, &text).await;
+                let response = match temp {
+                    Ok(None) => Caw,
+                    Ok(Some(ref content)) => Song { content },
+                    Err(e) => {
+                        error_buffer
+                            .write_fmt(format_args!("{e}"))
+                            .expect("Should not happen");
+                        let reason = error_buffer.as_str();
+                        got_error = true;
+
+                        Grumble { reason }
+                    }
+                };
+
+                let json = serde_json::to_string(&response).expect("Serialization should not fail");
+
+                if let Err(e) = socket.send(Message::Text(json.into())).await {
+                    error!("Websocket write failed: {e}");
+
+                    socket
+                        .close()
+                        .await
+                        .expect("Websocket connection should close");
+
+                    break;
+                }
+
+                // the things I do for love...
+                if got_error {
+                    error_buffer.clear();
+
+                    // no leak pls
+                    if error_buffer.len() >= 1024 {
+                        error_buffer.shrink_to(256);
+                    }
+
+                    got_error = false;
+                }
             }
+
+            Some(Err(e)) => {
+                error!("Socket read error: {e}");
+                socket
+                    .close()
+                    .await
+                    .expect("Wow this really isn't going well..");
+
+                break;
+            }
+            _ => continue,
         }
     }
 
@@ -72,10 +142,10 @@ async fn root_handler() -> &'static str {
     "pidgeon websocket server"
 }
 
-pub async fn start_websocket_server(tx: CrowWriter) -> Result<()> {
+pub async fn start_websocket_server(crow: Crow) -> Result<()> {
     let state = AppState {
         connected: Arc::new(AtomicBool::new(false)),
-        writer: Arc::new(Mutex::new(tx)),
+        crow: Arc::new(Mutex::new(crow)),
     };
 
     let app = Router::new()

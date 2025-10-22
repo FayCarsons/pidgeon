@@ -1,4 +1,5 @@
 use rustyline::error::ReadlineError;
+use tokio_util::codec::LinesCodecError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -12,6 +13,10 @@ pub enum Error {
     Repl(#[from] ReadlineError),
     #[error("Server reported error '{0}'")]
     Server(#[from] axum::http::Error),
+    #[error("Unexpected response from crow: '{0}'")]
+    Codec(#[from] LinesCodecError),
+    #[error("Connection closed")]
+    ConnectionClosed,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
