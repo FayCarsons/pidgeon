@@ -40,6 +40,10 @@ impl Crow {
         }
     }
 
+    pub(crate) fn mock(stream: SerialStream) -> Self {
+        Self(stream)
+    }
+
     pub fn split(self) -> (CrowReader, CrowWriter) {
         let (reader, writer) = tokio::io::split(self.0);
         let reader = FramedRead::new(reader, LinesCodec::new());

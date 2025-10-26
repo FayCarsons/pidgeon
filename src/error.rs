@@ -17,6 +17,8 @@ pub enum Error {
     Codec(#[from] LinesCodecError),
     #[error("Connection closed")]
     ConnectionClosed,
+    #[error("Serialization failed: '{0}'")]
+    Serialization(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

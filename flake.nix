@@ -35,6 +35,7 @@
               cmake
               openssl
               rustToolchain
+              lua-language-server
             ];
           };
       }

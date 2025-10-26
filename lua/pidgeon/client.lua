@@ -1,104 +1,253 @@
+-- client.lua: TCP client for length-prefixed JSON communication
 local M = {}
 
-local client = nil
-local isConnected = false
+local uv = vim.uv or vim.loop -- vim.uv is the modern name, vim.loop is older
 
-local function checkPidgeon()
-  -- Curl endpoint to see if pidgeon is available
-  local handle = io.popen("curl -s http://localhost:6666/check 2>/dev/null")
+---@class Client
+---@field private _socket uv.uv_tcp_t|nil
+---@field private _buffer string
+---@field private _connected boolean
+---@field private _connecting boolean
+---@field private _host string
+---@field private _port integer
+---@field private _on_message function|nil
+---@field private _on_error function|nil
+---@field private _on_connect function|nil
+---@field private _on_disconnect function|nil
 
-  if not handle then
-    return false
-  end
+local Client = {}
+Client.__index = Client
 
-  local result = handle:read('*a')
-  handle:close()
+--- Create a new TCP client
+---@param host string The hostname or IP address to connect to
+---@param port integer The port number to connect to
+---@param opts? table Optional configuration
+---   - on_message: function(data: table) Called when a complete JSON message is received
+---   - on_error: function(err: string) Called when an error occurs
+---   - on_connect: function() Called when connection is established
+---   - on_disconnect: function() Called when connection is closed
+---@return Client
+function M.new(host, port, opts)
+  opts = opts or {}
 
-  if result == "" then return false end
+  local self = setmetatable({
+    _socket = nil,
+    _buffer = "",
+    _connected = false,
+    _connecting = false,
+    _host = host,
+    _port = port,
+    _on_message = opts.on_message,
+    _on_error = opts.on_error,
+    _on_connect = opts.on_connect,
+    _on_disconnect = opts.on_disconnect,
+  }, Client)
 
-  local ok, data = pcall(vim.json.decode, result)
-  return ok and data
+  return self
 end
 
-function M.connect()
-  local status = checkPidgeon()
-  
-  if not status then 
-    vim.notify('Pidgeon is busy with another connection')
-    return false
+--- Connect to the server
+---@param callback? function Optional callback when connection completes
+function Client:connect(callback)
+  if self._connected then
+    if callback then
+      callback(nil) -- Already connected, no error
+    end
+    return
   end
 
-  local ok, websocket_client = pcall(require, 'websocket.client')
-
-  if not ok or not websocket_client or not websocket_client.WebsocketClient then 
-    vim.notify('websocket library not installed', vim.log.levels.ERROR)
-    if not ok then
-      print('Websocket require error:', websocket_client)
+  if self._connecting then
+    if callback then
+      callback("already connecting")
     end
-    return false
+    return
   end
 
-  client = websocket_client.WebsocketClient.new{
-    connect_addr = require('pidgeon').config.pidgeonURL,
+  self._connecting = true
+  self._socket = uv.new_tcp()
 
-    on_message = function(self, message)
-      vim.notify(message, vim.log.levels.INFO, { title = 'Pidgeon' })
-    end,
+  uv.tcp_connect(self._socket, self._host, self._port, function(err)
+    self._connecting = false
 
-    on_connect = function(self) 
-      isConnected = true
-      vim.notify('connected to pidgeon', vim.log.levels.INFO)
-    end,
-
-    on_disconnect = function(self)
-      isConnected = false
-      vim.notify('pidgeon disconnected', vim.log.levels.INFO)
-    end,
-
-    on_error = function(self, err)
-      vim.notify('Crow error: ' .. vim.inspect(err), vim.log.levels.ERROR)
+    if err then
+      self._connected = false
+      self:_handle_error("connection error: " .. err)
+      if callback then
+        callback(err)
+      end
+      return
     end
+
+    self._connected = true
+
+    -- Start reading from the socket
+    self:_start_reading()
+
+    -- Trigger connect callback
+    if self._on_connect then
+      vim.schedule(function()
+        self._on_connect()
+      end)
+    end
+
+    if callback then
+      callback(nil)
+    end
+  end)
+end
+
+--- Start reading from the socket
+function Client:_start_reading()
+  if not self._socket then
+    return
+  end
+
+  uv.read_start(self._socket, function(err, chunk)
+    if err then
+      self:_handle_error("read error: " .. err)
+      self:disconnect()
+      return
+    end
+
+    if not chunk then
+      -- EOF
+      self:disconnect()
+      return
+    end
+
+    -- Add chunk to buffer and process messages
+    self._buffer = self._buffer .. chunk
+    self:_process_buffer()
+  end)
+end
+
+--- Process the buffer to extract complete messages
+function Client:_process_buffer()
+  while #self._buffer >= 4 do
+    local msg_len = string.unpack(">I4", self._buffer:sub(1, 4))
+
+    -- Check if we have the complete message
+    if #self._buffer < 4 + msg_len then
+      -- Not enough data yet, wait for more
+      break
+    end
+
+    -- Extract the JSON message
+    local json_str = self._buffer:sub(5, 4 + msg_len)
+    self._buffer = self._buffer:sub(5 + msg_len)
+
+    -- Decode JSON and trigger callback
+    local success, result = pcall(vim.json.decode, json_str)
+
+    if success then
+      if self._on_message then
+        -- Schedule to run in main event loop to avoid re-entrancy issues
+        vim.schedule(function()
+          self._on_message(result)
+        end)
+      end
+    else
+      self:_handle_error("JSON decode error: " .. tostring(result))
+    end
+  end
+end
+
+--- Send a message to the server
+---@param data table The data to send (will be JSON encoded)
+---@param callback? function Optional callback(err: string|nil) when write completes
+function Client:send(data, callback)
+  if not self._connected or not self._socket then
+    local err = "Not connected"
+    if callback then
+      callback(err)
+    end
+    self:_handle_error(err)
+    return
+  end
+
+  -- Encode to JSON
+  local success, json_str = pcall(vim.json.encode, data)
+  if not success then
+    local err = "JSON encode error: " .. tostring(json_str)
+    if callback then
+      callback(err)
+    end
+    self:_handle_error(err)
+    return
+  end
+
+  -- Create length-prefixed message (4-byte big-endian length + JSON)
+  local msg_len = #json_str
+  local prefix = string.pack(">I4", msg_len)
+  local message = prefix .. json_str
+
+  -- Send the message
+  uv.write(self._socket, message, function(err)
+    if err then
+      self:_handle_error("Write error: " .. err)
+    end
+
+    if callback then
+      callback(err)
+    end
+  end)
+end
+
+--- Check if the client is connected
+---@return boolean
+function Client:is_connected()
+  return self._connected
+end
+
+--- Disconnect from the server
+function Client:disconnect()
+  if not self._socket then
+    return
+  end
+
+  local was_connected = self._connected
+  self._connected = false
+  self._connecting = false
+
+  -- Stop reading
+  if not uv.is_closing(self._socket) then
+    uv.read_stop(self._socket)
+    uv.close(self._socket)
+  end
+
+  self._socket = nil
+  self._buffer = ""
+
+  -- Trigger disconnect callback only if we were actually connected
+  if was_connected and self._on_disconnect then
+    vim.schedule(function()
+      self._on_disconnect()
+    end)
+  end
+end
+
+--- Handle errors
+---@param err string
+function Client:_handle_error(err)
+  if self._on_error then
+    vim.schedule(function()
+      self._on_error(err)
+    end)
+  end
+end
+
+--- Get connection info
+---@return table|nil
+function Client:get_info()
+  if not self._connected or not self._socket then
+    return nil
+  end
+
+  return {
+    host = self._host,
+    port = self._port,
+    connected = self._connected,
   }
-
-  client:try_connect()
-
-  return true
-end
-
-function M.disconnect()
-  if client then 
-    client:try_disconnect()
-    client = nil
-    isConnected = false
-  end
-end
-
-local function ready()
-  if not isConnected or not client then 
-    vim.notify('not connected to pidgeon server, run :PidgeonConnect', vim.log.levels.ERROR)
-    return false
-  end
-
-  return true 
-end
-
-function M.send(code)
-  if ready() then
-    client:try_send_data(code)
-    return true
-  end
-end
-
-function M.sendCurrentBuf() 
-  if ready() then
-    local content = vim.api.nvim_buf_get_lines(0,0,vim.api.nvim_buf_line_count(0), false)
-    client:try_send_data(table.concat(content, '\n'))
-    return true
-  end
-end
-
-function M.isConnected()
-  return isConnected
 end
 
 return M
