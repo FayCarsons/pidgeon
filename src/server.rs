@@ -35,17 +35,24 @@ struct Server {
 impl Server {
     async fn read_bytes(&mut self) -> Result<&[u8]> {
         let len = self.conn.read_u32().await?;
+        info!("got len: {len}");
+
         self.conn
             .read_exact(&mut self.backing_buf[0..len as usize])
             .await?;
+        info!("read {len} bytes successfully");
 
         Ok(&self.backing_buf[0..len as usize])
     }
 
     async fn write_bytes(&mut self, chunk: &[u8]) -> Result<()> {
-        debug_assert!(chunk.len() < u32::MAX as usize);
-        self.conn.write_u32(chunk.len() as u32).await?;
+        let len = chunk.len();
+        debug_assert!(len < u32::MAX as usize);
+
+        self.conn.write_u32(len as u32).await?;
+        info!("wrote prefix {len}");
         self.conn.write_all(chunk).await?;
+        info!("wrote {len} byte successfully");
 
         Ok(())
     }
@@ -64,10 +71,9 @@ impl Server {
 const BACKLOG: u32 = 10;
 
 fn make_conn(port: u16) -> Result<TcpListener> {
-    let conn = TcpSocket::new_v6()?;
+    let conn = TcpSocket::new_v4()?;
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     conn.set_reuseaddr(true)?;
-    conn.set_reuseport(true)?;
     conn.bind(addr)?;
 
     Ok(conn.listen(BACKLOG)?)
@@ -129,7 +135,9 @@ async fn handle_conn(server: &mut Server, crow: &mut Crow) -> Result<()> {
 }
 
 pub async fn run(crow: Crow, port: u16) -> Result<()> {
+    info!("start server");
     let listener = make_conn(port).expect("Failed to create socket");
+    info!("open socket");
 
     let crow = Arc::new(Mutex::new(crow));
     let busy = AtomicBool::new(false);

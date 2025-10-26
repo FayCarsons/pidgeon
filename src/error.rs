@@ -11,8 +11,6 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("Repl error '{0}'")]
     Repl(#[from] ReadlineError),
-    #[error("Server reported error '{0}'")]
-    Server(#[from] axum::http::Error),
     #[error("Unexpected response from crow: '{0}'")]
     Codec(#[from] LinesCodecError),
     #[error("Connection closed")]

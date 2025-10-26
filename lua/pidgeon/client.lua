@@ -3,6 +3,21 @@ local M = {}
 
 local uv = vim.uv or vim.loop -- vim.uv is the modern name, vim.loop is older
 
+local function pack_be_u32(value)
+  return string.char(
+    bit.rshift(value, 24),
+    bit.band(bit.rshift(value, 16), 0xFF),
+    bit.band(bit.rshift(value, 8), 0xFF),
+    bit.band(value, 0xFF)
+  )
+end
+
+-- Big-endian unpack
+local function unpack_be_u32(bytes)
+  local b1, b2, b3, b4 = bytes:byte(1, 4)
+  return bit.lshift(b1, 24) + bit.lshift(b2, 16) + bit.lshift(b3, 8) + b4
+end
+
 ---@class Client
 ---@field private _socket uv.uv_tcp_t|nil
 ---@field private _buffer string
@@ -124,7 +139,7 @@ end
 --- Process the buffer to extract complete messages
 function Client:_process_buffer()
   while #self._buffer >= 4 do
-    local msg_len = string.unpack(">I4", self._buffer:sub(1, 4))
+    local msg_len = unpack_be_u32(self._buffer:sub(1, 4))
 
     -- Check if we have the complete message
     if #self._buffer < 4 + msg_len then
@@ -178,7 +193,7 @@ function Client:send(data, callback)
 
   -- Create length-prefixed message (4-byte big-endian length + JSON)
   local msg_len = #json_str
-  local prefix = string.pack(">I4", msg_len)
+  local prefix = pack_be_u32(msg_len)
   local message = prefix .. json_str
 
   -- Send the message
@@ -225,6 +240,8 @@ function Client:disconnect()
     end)
   end
 end
+
+local x = 2 + 2
 
 --- Handle errors
 ---@param err string
