@@ -1,5 +1,6 @@
 # A Carrier Pidgeon for Monome Crow
-This is a simple REPL, script loader, and server for the Monome Crow. 
+This is a simple REPL, script loader, and server for the [Monome Crow](https://monome.org/docs/crow/). 
+
 *Currently a work in progress, expect bugs!*
 
 The CLI has three sub-commands:
